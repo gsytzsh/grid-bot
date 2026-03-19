@@ -8,7 +8,6 @@
 """
 import logging
 from typing import Dict, List, Optional
-from decimal import Decimal
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -109,8 +108,8 @@ class GridAnalyzer:
         # 计算每根 K 线的涨跌幅
         price_changes = []
         for i in range(1, len(klines)):
-            prev_close = klines[i-1]['c']
-            curr_close = klines[i]['c']
+            prev_close = float(klines[i-1]['c'])
+            curr_close = float(klines[i]['c'])
             change = abs(curr_close - prev_close) / prev_close * 100
             price_changes.append(change)
 
@@ -118,7 +117,7 @@ class GridAnalyzer:
         avg_vol = sum(price_changes) / len(price_changes)
 
         # 换算成周波动率（一周约 42 根 4 小时 K 线）
-        weekly_vol = avg_vol * (42 ** 0.5)
+        weekly_vol = float(avg_vol) * (42 ** 0.5)
 
         # 评分：5%-15% 得满分
         if 5 <= weekly_vol <= 15:
@@ -207,9 +206,9 @@ class GridAnalyzer:
             return 50, "数据不足"
 
         # 最近 50 根的最高/最低价
-        high = max(k['h'] for k in klines[:50])
-        low = min(k['l'] for k in klines[:50])
-        current = klines[0]['c']
+        high = float(max(k['h'] for k in klines[:50]))
+        low = float(min(k['l'] for k in klines[:50]))
+        current = float(klines[0]['c'])
 
         # 计算位置百分比
         range_size = high - low
@@ -251,8 +250,8 @@ class GridAnalyzer:
         # 计算最近 10 根的平均波动
         recent_changes = []
         for i in range(1, min(10, len(klines))):
-            prev_close = klines[i-1]['c']
-            curr_close = klines[i]['c']
+            prev_close = float(klines[i-1]['c'])
+            curr_close = float(klines[i]['c'])
             change = abs(curr_close - prev_close) / prev_close * 100
             recent_changes.append(change)
 
@@ -261,8 +260,8 @@ class GridAnalyzer:
         # 与长期波动比较
         long_changes = []
         for i in range(10, len(klines)):
-            prev_close = klines[i-1]['c']
-            curr_close = klines[i]['c']
+            prev_close = float(klines[i-1]['c'])
+            curr_close = float(klines[i]['c'])
             change = abs(curr_close - prev_close) / prev_close * 100
             long_changes.append(change)
 
@@ -286,46 +285,46 @@ class GridAnalyzer:
 
         return score, desc
 
-    def _calc_rsi(self, klines: List[Dict], period: int = 14) -> Decimal:
+    def _calc_rsi(self, klines: List[Dict], period: int = 14) -> float:
         """计算 RSI 指标"""
         if len(klines) < period + 1:
-            return Decimal('50')
+            return 50.0
 
         gains = []
         losses = []
 
         for i in range(1, min(period + 1, len(klines))):
-            change = klines[i]['c'] - klines[i-1]['c']
+            change = float(klines[i]['c']) - float(klines[i-1]['c'])
             if change > 0:
                 gains.append(change)
-                losses.append(Decimal('0'))
+                losses.append(0.0)
             else:
-                gains.append(Decimal('0'))
+                gains.append(0.0)
                 losses.append(abs(change))
 
         avg_gain = sum(gains) / period
         avg_loss = sum(losses) / period
 
         if avg_loss == 0:
-            return Decimal('100')
+            return 100.0
 
         rs = avg_gain / avg_loss
-        rsi = Decimal('100') - (Decimal('100') / (Decimal('1') + rs))
+        rsi = 100.0 - (100.0 / (1.0 + rs))
 
         return rsi
 
-    def _calc_ma_slope(self, klines: List[Dict], period: int = 20) -> Decimal:
+    def _calc_ma_slope(self, klines: List[Dict], period: int = 20) -> float:
         """计算均线斜率（百分比）"""
         if len(klines) < period * 2:
-            return Decimal('0')
+            return 0.0
 
         # 当前 MA
-        current_ma = sum(k['c'] for k in klines[:period]) / period
+        current_ma = sum(float(k['c']) for k in klines[:period]) / period
         # 5 根前的 MA
-        prev_ma = sum(k['c'] for k in klines[5:5+period]) / period
+        prev_ma = sum(float(k['c']) for k in klines[5:5+period]) / period
 
         if prev_ma == 0:
-            return Decimal('0')
+            return 0.0
 
         slope = (current_ma - prev_ma) / prev_ma * 100
         return slope
