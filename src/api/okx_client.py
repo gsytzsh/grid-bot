@@ -77,7 +77,7 @@ class OKXClient:
                         data = result.get('data', [])
                         if data and len(data) > 0:
                             ticker_data = data[0]
-                            logger.info(f"提取行情数据 [{inst_id}]: lastPx={ticker_data.get('lastPx')}")
+                            logger.info(f"提取行情数据 [{inst_id}]: last={ticker_data.get('last')}")
                             return ticker_data
                 elif isinstance(result, list):
                     if len(result) > 0:

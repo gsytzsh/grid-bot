@@ -70,7 +70,7 @@ class GridTradeManager:
         # 检查当前价格是否在区间内
         ticker = self.client.get_ticker(inst_id)
         if ticker:
-            current_price = Decimal(ticker.get('lastPx', '0'))
+            current_price = Decimal(ticker.get('last', '0'))
             if current_price <= lower_price:
                 return {"success": False, "message": f"当前价格 ({current_price}) 低于网格下限，可能立即满仓"}
             if current_price >= upper_price:
@@ -119,7 +119,7 @@ class GridTradeManager:
         if not ticker:
             return {"success": False, "message": "无法获取行情"}
 
-        current_price = Decimal(ticker.get('lastPx', '0'))
+        current_price = Decimal(ticker.get('last', '0'))
         if current_price == 0:
             current_price = Decimal(ticker.get('bidPx', '0'))
 
@@ -221,7 +221,7 @@ class GridTradeManager:
         # 更新当前价值
         ticker = self.client.get_ticker(grid.config.inst_id)
         if ticker:
-            current_price = Decimal(ticker.get('lastPx', '0'))
+            current_price = Decimal(ticker.get('last', '0'))
             grid.update_value(current_price)
 
         return {
@@ -265,7 +265,7 @@ class GridTradeManager:
             # 更新当前价值
             ticker = self.client.get_ticker(g.config.inst_id)
             if ticker:
-                current_price = Decimal(ticker.get('lastPx', '0'))
+                current_price = Decimal(ticker.get('last', '0'))
                 g.update_value(current_price)
 
             grids.append({
@@ -303,7 +303,7 @@ class GridTradeManager:
                     if not ticker:
                         continue
 
-                    current_price = Decimal(ticker.get('lastPx', '0'))
+                    current_price = Decimal(ticker.get('last', '0'))
                     if current_price == 0:
                         continue
 

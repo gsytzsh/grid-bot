@@ -138,7 +138,7 @@ class TradingManager:
         if not ticker:
             return
 
-        current_price = Decimal(ticker.get('lastPx', '0'))
+        current_price = Decimal(ticker.get('last', '0'))
         if current_price == 0:
             current_price = Decimal(ticker.get('bidPx', '0'))
 
@@ -182,7 +182,7 @@ class TradingManager:
             # 更新当前价格
             ticker = self.client.get_ticker(inst_id)
             if ticker:
-                current_price = Decimal(ticker.get('lastPx', '0'))
+                current_price = Decimal(ticker.get('last', '0'))
                 position.update_pnl(current_price)
 
                 # 检查止损

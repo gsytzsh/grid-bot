@@ -290,7 +290,7 @@ async def get_tickers():
         ticker = b.client.get_ticker(pair)
         if ticker:
             tickers[pair] = {
-                'last': ticker.get('lastPx', '0'),
+                'last': ticker.get('last', '0'),
                 'bid': ticker.get('bidPx', '0'),
                 'ask': ticker.get('askPx', '0')
             }
