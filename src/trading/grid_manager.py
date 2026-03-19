@@ -356,14 +356,9 @@ class GridTradeManager:
 
     async def _check_buy_order_filled(self, grid: GridInstance, level: GridLevel, current_price: Decimal):
         """检查买单是否成交"""
-        # 如果当前价格已经高于挂单价很多，可能已经错过，撤销订单
-        if current_price > level.price * Decimal('1.02'):
-            if level.order_id:
-                await self.cancel_order(grid.config.inst_id, level.order_id)
-                level.status = LevelStatus.PENDING
-                level.order_id = None
-                logger.info(f"撤销过时买单：{level.price}")
-            return
+        # 买单逻辑：价格下跌时成交
+        # 如果当前价格远高于挂单价，订单不太可能成交，但也不应该撤销
+        # 网格交易的买单就是要在低价挂着等成交
 
         # 检查订单状态
         if level.order_id:
@@ -435,14 +430,9 @@ class GridTradeManager:
 
     async def _check_sell_order_filled(self, grid: GridInstance, level: GridLevel, current_price: Decimal):
         """检查卖单是否成交"""
-        # 如果当前价格已经低于挂单价很多，可能已经错过，撤销订单
-        if current_price < level.price * Decimal('0.98'):
-            if level.order_id:
-                await self.cancel_order(grid.config.inst_id, level.order_id)
-                level.status = LevelStatus.PENDING
-                level.order_id = None
-                logger.info(f"撤销过时卖单：{level.price}")
-            return
+        # 卖单逻辑：价格上涨时成交
+        # 如果当前价格远低于挂单价，订单不太可能成交，但也不应该撤销
+        # 网格交易的卖单就是要在高价挂着等成交
 
         # 检查订单状态
         if level.order_id:
@@ -503,7 +493,8 @@ class GridTradeManager:
             if sell_level_id < len(grid.levels):
                 sell_price = grid.levels[sell_level_id].price
 
-                if current_price >= sell_price * Decimal('0.995'):
+                # 卖单逻辑：只要当前价低于卖单价，就应该挂单（等价格涨上去成交）
+                if current_price < sell_price:
                     # 检查是否已经有挂单
                     if level.status == LevelStatus.ORDER_PLACED and level.order_type == "sell":
                         return  # 已有挂单，跳过
@@ -521,7 +512,8 @@ class GridTradeManager:
                         logger.info(f"挂出卖单：{grid.config.inst_id} @ {sell_price}")
         else:
             # 没有持仓，挂买单
-            if current_price <= level.price * Decimal('1.005'):
+            # 买单逻辑：只要当前价高于买单价，就应该挂单（等价格跌下来成交）
+            if current_price > level.price:
                 # 检查是否已经有挂单
                 if level.status == LevelStatus.ORDER_PLACED:
                     return  # 已有挂单，跳过
