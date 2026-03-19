@@ -215,6 +215,23 @@ class GridTradeManager:
 
     def delete_grid(self, grid_id: str) -> Dict:
         """删除网格"""
+        grid = self.strategy.get_grid(grid_id)
+        if not grid:
+            return {"success": False, "message": "网格不存在"}
+
+        # 检查网格是否还在运行
+        if grid.status == GridStatus.ACTIVE:
+            return {"success": False, "message": "网格正在运行，请先停止再删除"}
+
+        # 检查是否有未撤销的挂单
+        pending_orders = [l for l in grid.levels if l.status == LevelStatus.ORDER_PLACED]
+        if pending_orders:
+            return {"success": False, "message": f"网格还有 {len(pending_orders)} 个挂单未撤销，请先停止网格"}
+
+        # 检查是否有持仓
+        if grid.positions:
+            return {"success": False, "message": f"网格还有 {len(grid.positions)} 个持仓未平仓，请先停止网格"}
+
         if self.strategy.delete_grid(grid_id):
             return {"success": True, "message": "网格已删除"}
         return {"success": False, "message": "网格不存在"}
@@ -318,8 +335,7 @@ class GridTradeManager:
                     action = self.strategy.check_stop_loss_take_profit(grid.grid_id, current_price)
                     if action:
                         logger.info(f"网格 {grid.grid_id} 触发 {action}")
-                        # 触发止损/止盈时，需要卖出所有持仓
-                        await self._close_all_positions(grid)
+                        # 触发止损/止盈时直接停止（stop_grid 会处理平仓）
                         await self.stop_grid(grid.grid_id)
                         continue
 
