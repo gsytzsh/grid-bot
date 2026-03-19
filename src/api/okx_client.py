@@ -238,7 +238,8 @@ class OKXClient:
             }, ...]
         """
         try:
-            result = self.market_api.get_candles(instId=inst_id, bar=bar, limit=str(limit))
+            # OKX SDK v0.4.1 使用 get_history_candles 方法
+            result = self.market_api.get_history_candles(instId=inst_id, bar=bar, limit=str(limit))
             logger.info(f"K 线 API 返回 [{inst_id}]: {result}")
             if result and isinstance(result, dict) and result.get('code') == '0':
                 data = result.get('data', [])
