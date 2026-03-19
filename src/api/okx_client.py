@@ -239,8 +239,10 @@ class OKXClient:
         """
         try:
             result = self.market_api.get_candles(instId=inst_id, bar=bar, limit=str(limit))
+            logger.info(f"K 线 API 返回 [{inst_id}]: {result}")
             if result and isinstance(result, dict) and result.get('code') == '0':
                 data = result.get('data', [])
+                logger.info(f"K 线数据 [{inst_id}] 解析成功，共 {len(data)} 条")
                 return [
                     {
                         'ts': int(item[0]),
@@ -253,6 +255,7 @@ class OKXClient:
                     for item in data
                 ]
             elif isinstance(result, list):
+                logger.info(f"K 线数据 [{inst_id}] 返回 list，共 {len(result)} 条")
                 return [
                     {
                         'ts': int(item[0]),
@@ -264,7 +267,8 @@ class OKXClient:
                     }
                     for item in result
                 ]
+            logger.warning(f"K 线 API 返回空值 [{inst_id}]: {result}")
             return []
         except Exception as e:
-            logger.error(f"获取 K 线失败：{e}")
+            logger.error(f"获取 K 线失败 [{inst_id}]: {e}")
             return []
