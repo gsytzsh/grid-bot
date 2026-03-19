@@ -398,6 +398,10 @@ class GridTradeManager:
 
             logger.info(f"买单成交：{grid.config.inst_id} @ {filled_price}, 目标卖出：{target_sell_price}")
 
+            # 重置买单级别状态（准备下一轮）
+            level.status = LevelStatus.PENDING
+            level.order_id = None
+
             # 检查目标卖单级别是否已有订单
             if sell_level.status == LevelStatus.ORDER_PLACED:
                 # 已有订单，需要先撤销（可能是之前的买单）
@@ -419,7 +423,9 @@ class GridTradeManager:
                 sell_level.order_type = "sell"
                 logger.info(f"挂出卖单：{grid.config.inst_id} @ {target_sell_price}")
         else:
-            # 已经是最上面一格，无法挂卖单，等待价格上涨后手动处理
+            # 已经是最上面一格，无法挂卖单，重置买单级别
+            level.status = LevelStatus.PENDING
+            level.order_id = None
             logger.info(f"买单成交于最高格：{grid.config.inst_id} @ {filled_price}, 等待价格上涨卖出")
 
     async def _on_sell_filled(self, grid: GridInstance, level: GridLevel, filled_price: Decimal):
@@ -441,16 +447,17 @@ class GridTradeManager:
         level.status = LevelStatus.PENDING
         level.order_id = None
         level.filled_price = None
+        level.order_type = "buy"  # 恢复为买单类型
 
         grid.total_trades += 1
 
-        # 重新在买单级别挂买单
+        # 重置买单级别状态（之前可能被占用）
         buy_level = grid.levels[buy_level_id]
         buy_level.status = LevelStatus.PENDING
         buy_level.order_id = None
         buy_level.order_type = "buy"
 
-        logger.info(f"准备重新挂买单：{grid.config.inst_id} @ {buy_level.price}")
+        logger.info(f"卖单成交，准备重新挂买单：{grid.config.inst_id} @ {buy_level.price}")
 
     async def _check_sell_order_filled(self, grid: GridInstance, level: GridLevel, current_price: Decimal):
         """检查卖单是否成交"""
