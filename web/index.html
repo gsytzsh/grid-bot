@@ -528,6 +528,14 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
                 });
+
+                // 检查 HTTP 状态码
+                if (!res.ok) {
+                    const error = await res.json();
+                    alert('创建失败：' + (error.detail || error.message || '未知错误'));
+                    return;
+                }
+
                 const result = await res.json();
 
                 if (result.success) {
@@ -535,10 +543,10 @@
                     closeCreateModal();
                     refreshData();
                 } else {
-                    alert('创建失败：' + result.message);
+                    alert('创建失败：' + (result.message || '未知错误'));
                 }
             } catch (e) {
-                alert('创建失败：' + e.message);
+                alert('创建失败：' + (e.message || '网络错误'));
             }
         }
 
