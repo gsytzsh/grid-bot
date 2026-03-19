@@ -385,6 +385,11 @@
                     return;
                 }
                 const tickers = await res.json();
+                // 缓存当前价格供预览使用
+                window.currentPrices = {};
+                Object.entries(tickers).forEach(([pair, data]) => {
+                    window.currentPrices[pair] = parseFloat(data.last) || 0;
+                });
                 const tbody = document.getElementById('tickersTable');
                 tbody.innerHTML = Object.entries(tickers).map(([pair, data]) => `
                     <tr>
@@ -496,13 +501,42 @@
                 const container = document.getElementById('pricePreview');
 
                 if (data.levels && data.levels.length > 0) {
-                    container.innerHTML = data.levels.map(l => `
-                        <div class="price-item ${l.type}">
-                            <span>格 ${l.level}</span>
-                            <span>${l.type === 'buy' ? '🟢 买入' : '🔴 卖出'}</span>
-                            <span>$${l.price.toFixed(2)}</span>
-                        </div>
-                    `).join('');
+                    // 获取当前价格（从 tickers 或默认值）
+                    const instId = document.getElementById('instId').value;
+                    const currentPrice = window.currentPrices?.[instId] || 0;
+
+                    container.innerHTML = data.levels.map(l => {
+                        // 根据当前价格判断实际挂单类型
+                        let displayType = l.type;
+                        let displayText = '🟢 买入';
+                        if (currentPrice > 0) {
+                            if (l.price >= currentPrice) {
+                                displayType = 'wait';  // 等待挂单
+                                displayText = '⏸️ 等待';
+                            } else {
+                                displayType = 'buy';
+                                displayText = '🟢 买入';
+                            }
+                        }
+                        return `
+                            <div class="price-item ${displayType}">
+                                <span>格 ${l.level}</span>
+                                <span>${displayText}</span>
+                                <span>$${l.price.toFixed(2)}</span>
+                            </div>
+                        `;
+                    }).join('');
+
+                    // 添加说明
+                    if (currentPrice > 0) {
+                        container.innerHTML += `
+                            <div style="margin-top:10px;padding:8px;background:#1f3460;border-radius:4px;font-size:12px;color:#888;">
+                                💡 当前价格：$${currentPrice} |
+                                启动时：在当前价下方挂买单 |
+                                买单成交后：在上一格挂卖单
+                            </div>
+                        `;
+                    }
                 }
             } catch (e) {
                 console.error('预览失败:', e);

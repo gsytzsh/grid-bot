@@ -212,16 +212,16 @@ class GridStrategy:
         """计算网格价格（用于预览）"""
         price_range = upper_price - lower_price
         grid_step = price_range / grid_num
-        mid_price = lower_price + price_range / 2
 
         levels = []
         for i in range(grid_num):
             price = lower_price + (grid_step * i)
-            order_type = "buy" if price < mid_price else "sell"
+            # 预览时只显示价格，实际买卖类型取决于当前价格
+            # 所有网格初始都是买单，买单成交后在上一格挂卖单
             levels.append({
                 'level': i + 1,
                 'price': float(price.quantize(Decimal('0.01'))),
-                'type': order_type
+                'type': 'buy'  # 初始都是买单
             })
 
         return levels
