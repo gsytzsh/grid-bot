@@ -205,6 +205,11 @@ class GridTradeManager:
                 level.status = LevelStatus.CANCELLED
                 level.order_id = None
 
+        # 卖出所有持仓（彻底清仓）
+        if grid.positions:
+            logger.info(f"网格 {grid_id} 有 {len(grid.positions)} 个持仓，开始平仓")
+            await self._close_all_positions(grid)
+
         logger.info(f"网格已停止：{grid_id}")
         return {"success": True, "message": "网格已停止"}
 
