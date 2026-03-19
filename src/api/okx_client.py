@@ -217,3 +217,54 @@ class OKXClient:
         except Exception as e:
             logger.error(f"获取交易对失败：{e}")
             return []
+
+    def get_klines(self, inst_id: str, bar: str = "1H", limit: int = 100) -> List[Dict]:
+        """
+        获取 K 线数据
+
+        Args:
+            inst_id: 交易对，如 BTC-USDT
+            bar: K 线周期，如 1m/3m/5m/15m/30m/1H/2H/4H/6H/12H/1D/1W/1M
+            limit: 返回数量，最多 300
+
+        返回：
+            [{
+                'ts': '1234567890',  # 时间戳
+                'o': '60000',        # 开盘价
+                'h': '61000',        # 最高价
+                'l': '59000',        # 最低价
+                'c': '60500',        # 收盘价
+                'vol': '1000'        # 成交量
+            }, ...]
+        """
+        try:
+            result = self.market_api.get_candles(instId=inst_id, bar=bar, limit=str(limit))
+            if result and isinstance(result, dict) and result.get('code') == '0':
+                data = result.get('data', [])
+                return [
+                    {
+                        'ts': int(item[0]),
+                        'o': Decimal(item[1]),
+                        'h': Decimal(item[2]),
+                        'l': Decimal(item[3]),
+                        'c': Decimal(item[4]),
+                        'vol': Decimal(item[5])
+                    }
+                    for item in data
+                ]
+            elif isinstance(result, list):
+                return [
+                    {
+                        'ts': int(item[0]),
+                        'o': Decimal(item[1]),
+                        'h': Decimal(item[2]),
+                        'l': Decimal(item[3]),
+                        'c': Decimal(item[4]),
+                        'vol': Decimal(item[5])
+                    }
+                    for item in result
+                ]
+            return []
+        except Exception as e:
+            logger.error(f"获取 K 线失败：{e}")
+            return []

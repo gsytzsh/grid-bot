@@ -221,6 +221,46 @@
         }
         .price-item.buy { color: #00ff88; }
         .price-item.sell { color: #ff4444; }
+
+        .analysis-box {
+            background: #1a1a2e;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        .analysis-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #1f3460;
+        }
+        .analysis-row:last-child { border-bottom: none; }
+        .analysis-label { color: #888; }
+        .analysis-value { font-weight: 600; }
+        .analysis-score {
+            text-align: center;
+            font-size: 24px;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 6px;
+        }
+        .analysis-score.good { background: #00d4aa22; color: #00ff88; }
+        .analysis-score.medium { background: #ffa50022; color: #ffa500; }
+        .analysis-score.bad { background: #ff444422; color: #ff4444; }
+        .analysis-suggestion {
+            text-align: center;
+            padding: 10px;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .analysis-risk {
+            color: #ff6b6b;
+            font-size: 13px;
+            padding: 8px;
+            margin-top: 8px;
+            background: #ff444411;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
@@ -339,6 +379,10 @@
                 <div class="form-group">
                     <label>网格价格预览</label>
                     <div id="pricePreview" class="price-preview"></div>
+                </div>
+                <div class="form-group">
+                    <button type="button" class="btn btn-secondary" onclick="analyzeMarket()" style="width: 100%; margin-bottom: 10px;">📊 分析市场</button>
+                    <div id="marketAnalysis" class="analysis-box" style="display: none;"></div>
                 </div>
                 <button type="submit" class="btn btn-primary" style="width: 100%;">创建网格</button>
             </form>
@@ -540,6 +584,61 @@
                 }
             } catch (e) {
                 console.error('预览失败:', e);
+            }
+        }
+
+        async function analyzeMarket() {
+            const instId = document.getElementById('instId').value;
+            const container = document.getElementById('marketAnalysis');
+
+            try {
+                container.style.display = 'block';
+                container.innerHTML = '<div style="text-align:center;padding:20px;">分析中...</div>';
+
+                const res = await fetch(`/api/grids/analyze?inst_id=${encodeURIComponent(instId)}`);
+                const data = await res.json();
+
+                // 判断评分等级
+                let scoreClass = 'bad';
+                let scoreText = '不建议';
+                if (data.score >= 70) {
+                    scoreClass = 'good';
+                    scoreText = '适合';
+                } else if (data.score >= 50) {
+                    scoreClass = 'medium';
+                    scoreText = '一般';
+                }
+
+                container.innerHTML = `
+                    <div class="analysis-score ${scoreClass}">
+                        <div style="font-size:14px;color:#888;">综合评分</div>
+                        <div style="font-size:32px;font-weight:bold;">${data.score}/100</div>
+                        <div style="font-size:14px;margin-top:5px;">${scoreText}网格交易</div>
+                    </div>
+                    <div class="analysis-row">
+                        <span class="analysis-label">📊 波动率</span>
+                        <span class="analysis-value">${data.signals.volatility || '-'}</span>
+                    </div>
+                    <div class="analysis-row">
+                        <span class="analysis-label">📈 趋势</span>
+                        <span class="analysis-value">${data.signals.trend || '-'}</span>
+                    </div>
+                    <div class="analysis-row">
+                        <span class="analysis-label">📍 价格位置</span>
+                        <span class="analysis-value">${data.signals.price_position || '-'}</span>
+                    </div>
+                    <div class="analysis-row">
+                        <span class="analysis-label">⚡ 短期波动</span>
+                        <span class="analysis-value">${data.signals.short_volatility || '-'}</span>
+                    </div>
+                    <div class="analysis-suggestion">${data.suggestion}</div>
+                    ${data.risk_warning && data.risk_warning !== '无重大风险' ? `
+                        <div class="analysis-risk">⚠️ ${data.risk_warning}</div>
+                    ` : ''}
+                `;
+            } catch (e) {
+                container.style.display = 'block';
+                container.innerHTML = `<div style="color:#ff6b6b;padding:15px;">分析失败：${e.message}</div>`;
             }
         }
 

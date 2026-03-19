@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ..api.okx_client import OKXClient
 from ..trading.grid_manager import GridTradeManager
+from ..strategy.grid_analyzer import GridAnalyzer
 from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class TradingBot:
         self.config = config
         self.client: Optional[OKXClient] = None
         self.grid_manager: Optional[GridTradeManager] = None
+        self.analyzer: Optional[GridAnalyzer] = None
         self.running = False
         self._monitor_task: Optional[asyncio.Task] = None
 
@@ -60,6 +62,7 @@ class TradingBot:
             )
 
             self.grid_manager = GridTradeManager(self.client)
+            self.analyzer = GridAnalyzer(self.client)
 
             logger.info("初始化成功")
             return True
@@ -193,6 +196,23 @@ async def preview_grid(req: GridPreviewRequest):
         req.grid_num
     )
     return {"levels": levels}
+
+
+@app.get("/api/grids/analyze")
+async def analyze_grid(inst_id: str):
+    """分析交易对是否适合网格交易"""
+    b = get_or_create_bot()
+    if not b.analyzer:
+        raise HTTPException(status_code=500, detail="Not initialized")
+
+    result = b.analyzer.analyze(inst_id)
+    return {
+        "suitable": result.suitable,
+        "score": result.score,
+        "signals": result.signals,
+        "suggestion": result.suggestion,
+        "risk_warning": result.risk_warning
+    }
 
 
 @app.post("/api/grids/create")
