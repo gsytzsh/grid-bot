@@ -69,14 +69,20 @@ class OKXClient:
         """获取行情数据"""
         try:
             result = self.market_api.get_ticker(instId=inst_id)
+            logger.debug(f"OKX API 返回：{result}")
             # OKX API v5 返回格式：{"code": "0", "data": [...]}
             if result:
-                if isinstance(result, dict) and result.get('code') == '0':
-                    data = result.get('data', [])
-                    if data and len(data) > 0:
-                        return data[0]
-                elif isinstance(result, list) and len(result) > 0:
-                    return result[0]
+                if isinstance(result, dict):
+                    logger.debug(f"返回类型 dict, code={result.get('code')}, data={result.get('data')}")
+                    if result.get('code') == '0':
+                        data = result.get('data', [])
+                        if data and len(data) > 0:
+                            return data[0]
+                elif isinstance(result, list):
+                    logger.debug(f"返回类型 list, len={len(result)}")
+                    if len(result) > 0:
+                        return result[0]
+            logger.warning(f"获取行情返回空值 {inst_id}: {result}")
             return None
         except Exception as e:
             logger.error(f"获取行情失败 {inst_id}: {e}")
