@@ -142,18 +142,20 @@ class GridTradeManager:
 
             # 在当前价下方的网格挂买单（价格低于当前价）
             if level.price < current_price:
-                # 如果价格已经非常接近网格价，直接挂单
-                if current_price <= level.price * Decimal('1.01'):
-                    result = await self._place_limit_order(
-                        grid.config.inst_id,
-                        "buy",
-                        str(level.size),
-                        str(level.price)
-                    )
-                    if result["success"]:
-                        level.order_id = result["order_id"]
-                        level.status = LevelStatus.ORDER_PLACED
-                        logger.info(f"挂出买单：{grid.config.inst_id} @ {level.price}")
+                # 检查是否已经有挂单
+                if level.status == LevelStatus.ORDER_PLACED:
+                    continue
+
+                result = await self._place_limit_order(
+                    grid.config.inst_id,
+                    "buy",
+                    str(level.size),
+                    str(level.price)
+                )
+                if result["success"]:
+                    level.order_id = result["order_id"]
+                    level.status = LevelStatus.ORDER_PLACED
+                    logger.info(f"挂出买单：{grid.config.inst_id} @ {level.price}")
 
     async def _place_limit_order(
         self,
