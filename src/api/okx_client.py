@@ -39,33 +39,29 @@ class OKXClient:
         # 初始化 OKX 客户端
         self.trade_api = Trade.TradeAPI(
             api_key=api_key,
-            secret_key=secret_key,
+            api_secret_key=secret_key,
             passphrase=passphrase,
-            password=password,
             flag='0'  # 0: 正式交易，1: 模拟盘
         )
 
         self.account_api = Account.AccountAPI(
             api_key=api_key,
-            secret_key=secret_key,
+            api_secret_key=secret_key,
             passphrase=passphrase,
-            password=password,
             flag='0'
         )
 
         self.market_api = MarketData.MarketAPI(
             api_key=api_key,
-            secret_key=secret_key,
+            api_secret_key=secret_key,
             passphrase=passphrase,
-            password=password,
             flag='0'
         )
 
         self.public_api = PublicData.PublicAPI(
             api_key=api_key,
-            secret_key=secret_key,
+            api_secret_key=secret_key,
             passphrase=passphrase,
-            password=password,
             flag='0'
         )
 
