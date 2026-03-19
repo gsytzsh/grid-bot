@@ -598,6 +598,12 @@
                 const res = await fetch(`/api/grids/analyze?inst_id=${encodeURIComponent(instId)}`);
                 const data = await res.json();
 
+                // 检查是否有错误
+                if (data.signals && data.signals.error) {
+                    container.innerHTML = `<div style="color:#ffa500;padding:20px;text-align:center;">⚠️ ${data.signals.error}<br>${data.suggestion}</div>`;
+                    return;
+                }
+
                 // 判断评分等级
                 let scoreClass = 'bad';
                 let scoreText = '不建议';
@@ -617,19 +623,19 @@
                     </div>
                     <div class="analysis-row">
                         <span class="analysis-label">📊 波动率</span>
-                        <span class="analysis-value">${data.signals.volatility || '-'}</span>
+                        <span class="analysis-value">${data.signals?.volatility || '-'}</span>
                     </div>
                     <div class="analysis-row">
                         <span class="analysis-label">📈 趋势</span>
-                        <span class="analysis-value">${data.signals.trend || '-'}</span>
+                        <span class="analysis-value">${data.signals?.trend || '-'}</span>
                     </div>
                     <div class="analysis-row">
                         <span class="analysis-label">📍 价格位置</span>
-                        <span class="analysis-value">${data.signals.price_position || '-'}</span>
+                        <span class="analysis-value">${data.signals?.price_position || '-'}</span>
                     </div>
                     <div class="analysis-row">
                         <span class="analysis-label">⚡ 短期波动</span>
-                        <span class="analysis-value">${data.signals.short_volatility || '-'}</span>
+                        <span class="analysis-value">${data.signals?.short_volatility || '-'}</span>
                     </div>
                     <div class="analysis-suggestion">${data.suggestion}</div>
                     ${data.risk_warning && data.risk_warning !== '无重大风险' ? `
