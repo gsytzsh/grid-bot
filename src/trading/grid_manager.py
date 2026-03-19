@@ -382,27 +382,44 @@ class GridTradeManager:
 
     async def _on_buy_filled(self, grid: GridInstance, level: GridLevel, filled_price: Decimal):
         """买单成交后的处理"""
-        # 更新网格状态
-        level.status = LevelStatus.PENDING  # 重置为 pending，等待挂卖单
-        level.filled_price = filled_price
-        grid.total_trades += 1
-
         # 获取目标卖出价格（上一格）
         sell_level_id = level.level_id + 1
         if sell_level_id < len(grid.levels):
             target_sell_price = grid.levels[sell_level_id].price
+            sell_level = grid.levels[sell_level_id]
 
             # 记录持仓
             grid.add_position(
-                level_id=level.level_id,
+                level_id=level.level_id,  # 买单级别 ID 作为 key
                 coin_size=level.size,
                 buy_price=filled_price,
                 target_sell_price=target_sell_price
             )
 
             logger.info(f"买单成交：{grid.config.inst_id} @ {filled_price}, 目标卖出：{target_sell_price}")
+
+            # 检查目标卖单级别是否已有订单
+            if sell_level.status == LevelStatus.ORDER_PLACED:
+                # 已有订单，需要先撤销（可能是之前的买单）
+                if sell_level.order_id:
+                    await self.cancel_order(grid.config.inst_id, sell_level.order_id)
+                    logger.info(f"撤销 {sell_level.order_type} 单：{grid.config.inst_id} @ {sell_level.price}")
+
+            # 挂出卖单
+            result = await self._place_limit_order(
+                grid.config.inst_id,
+                "sell",
+                str(level.size),
+                str(target_sell_price)
+            )
+            if result["success"]:
+                # 更新卖单级别的状态
+                sell_level.order_id = result["order_id"]
+                sell_level.status = LevelStatus.ORDER_PLACED
+                sell_level.order_type = "sell"
+                logger.info(f"挂出卖单：{grid.config.inst_id} @ {target_sell_price}")
         else:
-            # 已经是最上面一格，直接卖出
+            # 已经是最上面一格，无法挂卖单，等待价格上涨后手动处理
             logger.info(f"买单成交于最高格：{grid.config.inst_id} @ {filled_price}, 等待价格上涨卖出")
 
     async def _on_sell_filled(self, grid: GridInstance, level: GridLevel, filled_price: Decimal):
@@ -420,13 +437,20 @@ class GridTradeManager:
             # 清除持仓
             grid.remove_position(buy_level_id)
 
-        # 重置网格状态，准备下一轮
+        # 重置卖单级别状态
         level.status = LevelStatus.PENDING
         level.order_id = None
         level.filled_price = None
-        level.order_type = "buy"  # 恢复为买单类型
 
         grid.total_trades += 1
+
+        # 重新在买单级别挂买单
+        buy_level = grid.levels[buy_level_id]
+        buy_level.status = LevelStatus.PENDING
+        buy_level.order_id = None
+        buy_level.order_type = "buy"
+
+        logger.info(f"准备重新挂买单：{grid.config.inst_id} @ {buy_level.price}")
 
     async def _check_sell_order_filled(self, grid: GridInstance, level: GridLevel, current_price: Decimal):
         """检查卖单是否成交"""
@@ -482,36 +506,40 @@ class GridTradeManager:
 
     async def _check_and_place_order(self, grid: GridInstance, level: GridLevel, current_price: Decimal):
         """检查并挂单"""
-        # 所有网格初始都是买单，但成交后会变成卖单（通过持仓追踪）
-        # 检查是否有该格的持仓
+        # 检查这个级别是否有买单持仓（需要挂卖单）
         position = grid.get_position(level.level_id)
 
         if position:
-            # 有持仓，应该挂卖单
-            # 卖出价 = 下一格价格
+            # 有持仓，应该在目标价格挂卖单
+            # 但卖单已经在 _on_buy_filled 中挂出了，这里只需要检查状态
+            # 找到卖单所在的级别
             sell_level_id = level.level_id + 1
             if sell_level_id < len(grid.levels):
-                sell_price = grid.levels[sell_level_id].price
+                sell_level = grid.levels[sell_level_id]
+                # 检查卖单是否还在
+                if sell_level.status != LevelStatus.ORDER_PLACED or sell_level.order_type != "sell":
+                    # 卖单没了，先撤销这个级别可能存在的其他订单
+                    if sell_level.status == LevelStatus.ORDER_PLACED and sell_level.order_id:
+                        await self.cancel_order(grid.config.inst_id, sell_level.order_id)
 
-                # 卖单逻辑：只要当前价低于卖单价，就应该挂单（等价格涨上去成交）
-                if current_price < sell_price:
-                    # 检查是否已经有挂单
-                    if level.status == LevelStatus.ORDER_PLACED and level.order_type == "sell":
-                        return  # 已有挂单，跳过
-
+                    # 重新挂卖单
                     result = await self._place_limit_order(
                         grid.config.inst_id,
                         "sell",
                         str(position.coin_size),
-                        str(sell_price)
+                        str(position.target_sell_price)
                     )
                     if result["success"]:
-                        level.order_id = result["order_id"]
-                        level.status = LevelStatus.ORDER_PLACED
-                        level.order_type = "sell"  # 标记为卖单
-                        logger.info(f"挂出卖单：{grid.config.inst_id} @ {sell_price}")
+                        sell_level.order_id = result["order_id"]
+                        sell_level.status = LevelStatus.ORDER_PLACED
+                        sell_level.order_type = "sell"
+                        logger.info(f"重新挂出卖单：{grid.config.inst_id} @ {position.target_sell_price}")
         else:
             # 没有持仓，挂买单
+            # 先检查这个级别是否已经有卖单（有卖单说明有对应持仓，不应该挂买单）
+            if level.status == LevelStatus.ORDER_PLACED and level.order_type == "sell":
+                return  # 已有卖单，跳过
+
             # 买单逻辑：只要当前价高于买单价，就应该挂单（等价格跌下来成交）
             if current_price > level.price:
                 # 检查是否已经有挂单
