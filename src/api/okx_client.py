@@ -107,8 +107,12 @@ class OKXClient:
         """获取账户余额"""
         try:
             result = self.account_api.get_account_balance()
-            if result and result.get('details'):
-                return result['details']
+            logger.debug(f"余额 API 返回：{result}")
+            # OKX API v5 返回格式：{"code": "0", "data": [{"details": [...]}]}
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    return data[0].get('details', [])
             return []
         except Exception as e:
             logger.error(f"获取余额失败：{e}")
