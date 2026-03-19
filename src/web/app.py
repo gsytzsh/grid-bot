@@ -228,6 +228,12 @@ async def start_grid(grid_id: str):
     result = await b.grid_manager.start_grid(grid_id)
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
+
+    # 如果机器人还没启动，自动启动（确保监控循环运行）
+    if not b.running:
+        await b.start()
+        logger.info(f"网格 {grid_id} 启动，机器人监控循环已自动启动")
+
     return result
 
 
