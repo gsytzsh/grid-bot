@@ -173,17 +173,7 @@ async def get_grids():
     return b.get_grids()
 
 
-@app.get("/api/grids/{grid_id}")
-async def get_grid_info(grid_id: str):
-    """获取网格详情"""
-    b = get_or_create_bot()
-    info = b.get_grid_info(grid_id)
-    if not info:
-        raise HTTPException(status_code=404, detail="Grid not found")
-    return info
-
-
-@app.post("/api/grids/preview")
+@app.get("/api/grids/preview")
 async def preview_grid(req: GridPreviewRequest):
     """预览网格价格"""
     b = get_or_create_bot()
@@ -213,6 +203,16 @@ async def analyze_grid(inst_id: str):
         "suggestion": result.suggestion,
         "risk_warning": result.risk_warning
     }
+
+
+@app.get("/api/grids/{grid_id}")
+async def get_grid_info(grid_id: str):
+    """获取网格详情"""
+    b = get_or_create_bot()
+    info = b.get_grid_info(grid_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="Grid not found")
+    return info
 
 
 @app.post("/api/grids/create")
