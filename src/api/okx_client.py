@@ -4,7 +4,7 @@ OKX API 封装模块
 from okx import Trade, Account, MarketData, PublicData
 from typing import Optional, Dict, List
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ class OKXClient:
             passphrase=passphrase,
             flag='0'
         )
+        self._instrument_rules_cache: Dict[str, Dict] = {}
 
     @staticmethod
     def _extract_data_items(result) -> List[Dict]:
@@ -74,6 +75,74 @@ class OKXClient:
         if isinstance(result, list):
             return result
         return []
+
+    @staticmethod
+    def _decimal_to_str(value: Decimal) -> str:
+        """Decimal 转字符串，避免科学计数法"""
+        return format(value.normalize(), 'f') if value != 0 else "0"
+
+    @staticmethod
+    def _to_decimal(value, default: str = "0") -> Decimal:
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return Decimal(default)
+
+    @staticmethod
+    def _floor_to_step(value: Decimal, step: Decimal) -> Decimal:
+        """按步长向下取整"""
+        if step <= 0:
+            return value
+        units = (value / step).to_integral_value(rounding=ROUND_DOWN)
+        return units * step
+
+    def _get_instrument_rules(self, inst_id: str) -> Optional[Dict]:
+        """获取交易对精度规则（tickSz/minSz/lotSz）"""
+        if inst_id in self._instrument_rules_cache:
+            return self._instrument_rules_cache[inst_id]
+        try:
+            result = self.public_api.get_instruments(instType='SPOT', instId=inst_id)
+            data = self._extract_data_items(result)
+            if data:
+                item = data[0]
+                rules = {
+                    "tick_sz": self._to_decimal(item.get("tickSz", "0")),
+                    "min_sz": self._to_decimal(item.get("minSz", "0")),
+                    "lot_sz": self._to_decimal(item.get("lotSz", item.get("minSz", "0")))
+                }
+                self._instrument_rules_cache[inst_id] = rules
+                return rules
+        except Exception as e:
+            logger.warning(f"获取交易规则失败 {inst_id}: {e}")
+        return None
+
+    @staticmethod
+    def _is_live_state(state: str) -> bool:
+        normalized = str(state or "").lower()
+        return normalized in {"live", "partially_filled", "1", "2", "5"}
+
+    def get_live_orders(self, inst_id: str) -> List[Dict]:
+        """获取某交易对 live 订单（含部分成交）"""
+        try:
+            result = self.trade_api.get_order_list(instType="SPOT", instId=inst_id)
+            data = self._extract_data_items(result)
+            live_orders = []
+            for item in data:
+                if item.get("instId") != inst_id:
+                    continue
+                if self._is_live_state(item.get("state", "")):
+                    live_orders.append(item)
+            return live_orders
+        except Exception as e:
+            logger.warning(f"获取 live 订单失败 {inst_id}: {e}")
+            return []
+
+    def is_order_live(self, inst_id: str, order_id: str) -> bool:
+        """检查订单是否仍在交易所 live"""
+        for order in self.get_live_orders(inst_id):
+            if order.get("ordId") == order_id:
+                return True
+        return False
 
     def get_ticker(self, inst_id: str) -> Optional[Dict]:
         """获取行情数据"""
@@ -146,16 +215,44 @@ class OKXClient:
     ) -> OrderResult:
         """下单交易"""
         try:
+            size_dec = self._to_decimal(size)
+            if size_dec <= 0:
+                return OrderResult(success=False, message=f"订单数量无效: {size}")
+
+            rules = self._get_instrument_rules(inst_id)
+            if rules:
+                lot_sz = rules.get("lot_sz", Decimal("0"))
+                min_sz = rules.get("min_sz", Decimal("0"))
+                if lot_sz > 0:
+                    size_dec = self._floor_to_step(size_dec, lot_sz)
+                elif min_sz > 0:
+                    size_dec = self._floor_to_step(size_dec, min_sz)
+
+                if min_sz > 0 and size_dec < min_sz:
+                    return OrderResult(success=False, message=f"订单数量低于最小值 {min_sz}")
+
             order_args = {
                 'instId': inst_id,
                 'side': side,
-                'sz': size,
+                'sz': self._decimal_to_str(size_dec),
                 'tdMode': 'cash',  # 现货交易
                 'ordType': order_type,
             }
 
             if price and order_type == "limit":
-                order_args['px'] = price
+                price_dec = self._to_decimal(price)
+                if price_dec <= 0:
+                    return OrderResult(success=False, message=f"订单价格无效: {price}")
+
+                if rules:
+                    tick_sz = rules.get("tick_sz", Decimal("0"))
+                    if tick_sz > 0:
+                        price_dec = self._floor_to_step(price_dec, tick_sz)
+
+                if price_dec <= 0:
+                    return OrderResult(success=False, message=f"归一化后价格无效: {price}")
+
+                order_args['px'] = self._decimal_to_str(price_dec)
 
             result = self.trade_api.place_order(**order_args)
             data = self._extract_data_items(result)
@@ -216,6 +313,7 @@ class OKXClient:
                         'base_ccy': item['baseCcy'],
                         'quote_ccy': item['quoteCcy'],
                         'min_sz': item.get('minSz', '0'),
+                        'lot_sz': item.get('lotSz', item.get('minSz', '0')),
                         'tick_sz': item.get('tickSz', '0.01'),
                     }
                     for item in data

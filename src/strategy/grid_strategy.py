@@ -298,15 +298,14 @@ class GridStrategy:
     def _normalize_loaded_grid(self, grid: GridInstance):
         """兼容旧持久化数据格式，统一为当前网格结构"""
         step = (grid.config.upper_price - grid.config.lower_price) / grid.config.grid_num
-        default_size = (
-            (grid.config.investment_amount / grid.config.lower_price * Decimal('0.9')) / grid.config.grid_num
-        ).quantize(Decimal('0.0001'))
+        per_level_usdt = (grid.config.investment_amount * Decimal('0.9')) / grid.config.grid_num
 
         # 统一只维护 buy 级别（0..grid_num-1）
         old_levels = {level.level_id: level for level in grid.levels}
         normalized_levels: List[GridLevel] = []
         for i in range(grid.config.grid_num):
             price = (grid.config.lower_price + step * i).quantize(Decimal('0.01'))
+            default_size = (per_level_usdt / price).quantize(Decimal('0.00000001'))
             level = old_levels.get(i)
             if level:
                 level.price = price
@@ -359,18 +358,21 @@ class GridStrategy:
         grid_step = price_range / config.grid_num
 
         # 计算每格订单大小
-        # 按最低价格计算，确保每格都有足够的资金
-        total_size = config.investment_amount / config.lower_price * Decimal('0.9')  # 留 10% 余量
-        size_per_grid = total_size / config.grid_num
-
-        # 验证最小订单大小（OKX 最小 5 USDT）
-        min_order_usdt = size_per_grid * config.lower_price
-        if min_order_usdt < Decimal('5'):
-            raise ValueError(f"每格订单太小 ({min_order_usdt} USDT)，需要≥5 USDT。100 USDT 建议最多 18 格")
+        # 按等 USDT 分配，避免高价层超预算
+        reserve_ratio = Decimal('0.9')  # 留 10% 余量
+        per_level_usdt = (config.investment_amount * reserve_ratio) / config.grid_num
+        if per_level_usdt < Decimal('5'):
+            raise ValueError(
+                f"每格资金太小 ({per_level_usdt:.4f} USDT)，需要≥5 USDT。"
+                f"当前投资建议最多 {int(config.investment_amount * reserve_ratio / Decimal('5'))} 格"
+            )
 
         levels = []
+        total_cost_estimate = Decimal('0')
         for i in range(config.grid_num):
             price = config.lower_price + (grid_step * i)
+            size_at_level = (per_level_usdt / price).quantize(Decimal('0.00000001'))
+            total_cost_estimate += size_at_level * price
 
             # 所有网格都标记为"buy"类型
             # 实际交易时，买单成交后会在更高价格挂"sell"单
@@ -378,9 +380,14 @@ class GridStrategy:
                 level_id=i,
                 price=price.quantize(Decimal('0.01')),
                 order_type="buy",  # 初始都是买单
-                size=size_per_grid.quantize(Decimal('0.0001'))
+                size=size_at_level
             )
             levels.append(level)
+
+        if total_cost_estimate > config.investment_amount:
+            raise ValueError(
+                f"网格预算超出投资金额，预计总成本 {total_cost_estimate:.4f} > {config.investment_amount}"
+            )
 
         grid = GridInstance(
             grid_id=grid_id,
