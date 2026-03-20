@@ -13,6 +13,7 @@ from pathlib import Path
 from ..api.okx_client import OKXClient
 from ..trading.grid_manager import GridTradeManager
 from ..strategy.grid_analyzer import GridAnalyzer
+from ..strategy.grid_strategy import GridStatus
 from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,21 @@ def get_or_create_bot() -> TradingBot:
         bot = TradingBot(_config)
         bot.initialize()
     return bot
+
+
+@app.on_event("startup")
+async def auto_resume_active_grids():
+    """进程启动时自动恢复已激活网格的监控循环"""
+    b = get_or_create_bot()
+    if not b.grid_manager:
+        return
+
+    has_active_grid = any(
+        g.status == GridStatus.ACTIVE for g in b.grid_manager.strategy.get_all_grids()
+    )
+    if has_active_grid and not b.running:
+        await b.start()
+        logger.info("检测到 active 网格，已自动恢复监控循环")
 
 
 @app.get("/")

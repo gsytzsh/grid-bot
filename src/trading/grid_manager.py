@@ -206,36 +206,69 @@ class GridTradeManager:
         # 撤销买单
         for level in grid.levels:
             if level.order_id and level.status == LevelStatus.ORDER_PLACED:
-                cancel_ok = await self.cancel_order(grid.config.inst_id, level.order_id)
+                order_id = level.order_id
+                cancel_ok = await self.cancel_order(grid.config.inst_id, order_id)
                 if cancel_ok:
-                    level.order_id = None
-                    level.status = LevelStatus.PENDING
-                else:
-                    if self.client.is_order_live(grid.config.inst_id, level.order_id):
-                        errors.append(f"买单撤销失败 level={level.level_id} order_id={level.order_id}")
-                    else:
-                        # 交易所已不存在该订单，本地可清理
+                    reconciled = await self._reconcile_buy_order_after_cancel(
+                        grid,
+                        level,
+                        order_id,
+                        place_sell=False
+                    )
+                    if not reconciled:
                         level.order_id = None
                         level.status = LevelStatus.PENDING
+                else:
+                    if self.client.is_order_live(grid.config.inst_id, order_id):
+                        errors.append(f"买单撤销失败 level={level.level_id} order_id={order_id}")
+                    else:
+                        # 交易所已不存在该订单，本地可清理
+                        reconciled = await self._reconcile_buy_order_after_cancel(
+                            grid,
+                            level,
+                            order_id,
+                            place_sell=False
+                        )
+                        if not reconciled:
+                            level.order_id = None
+                            level.status = LevelStatus.PENDING
             else:
                 level.order_id = None
-                level.status = LevelStatus.PENDING
+                level.status = LevelStatus.FILLED if grid.get_position(level.level_id) else LevelStatus.PENDING
             level.order_type = "buy"
 
         # 撤销持仓卖单
-        for position in grid.positions.values():
+        for position in list(grid.positions.values()):
             if position.sell_order_id:
-                cancel_ok = await self.cancel_order(grid.config.inst_id, position.sell_order_id)
+                order_id = position.sell_order_id
+                fallback_price = position.target_sell_price
+                cancel_ok = await self.cancel_order(grid.config.inst_id, order_id)
                 if cancel_ok:
-                    position.sell_order_id = None
+                    await self._reconcile_sell_order_after_cancel(
+                        grid,
+                        position.level_id,
+                        order_id,
+                        fallback_price
+                    )
+                    remaining = grid.get_position(position.level_id)
+                    if remaining:
+                        remaining.sell_order_id = None
                 else:
-                    if self.client.is_order_live(grid.config.inst_id, position.sell_order_id):
+                    if self.client.is_order_live(grid.config.inst_id, order_id):
                         errors.append(
-                            f"卖单撤销失败 level={position.level_id} order_id={position.sell_order_id}"
+                            f"卖单撤销失败 level={position.level_id} order_id={order_id}"
                         )
                         locked_position_levels.add(position.level_id)
                     else:
-                        position.sell_order_id = None
+                        await self._reconcile_sell_order_after_cancel(
+                            grid,
+                            position.level_id,
+                            order_id,
+                            fallback_price
+                        )
+                        remaining = grid.get_position(position.level_id)
+                        if remaining:
+                            remaining.sell_order_id = None
 
         if grid.positions:
             logger.info(f"网格 {grid_id} 有 {len(grid.positions)} 个持仓，开始平仓")
@@ -449,6 +482,74 @@ class GridTradeManager:
         self._missing_order_checks[order_id] = count
         return count >= threshold
 
+    async def _fetch_final_order_snapshot(
+        self,
+        inst_id: str,
+        order_id: str,
+        retries: int = 4,
+        interval: float = 0.25
+    ) -> Optional[Dict]:
+        """
+        尝试在撤单后读取订单最终快照，用于识别部分成交。
+        """
+        final_order = await self._wait_order_status(
+            inst_id,
+            order_id,
+            retries=retries,
+            interval=interval
+        )
+        if final_order:
+            return final_order
+        return self.client.get_order_status(inst_id, order_id)
+
+    async def _reconcile_buy_order_after_cancel(
+        self,
+        grid: GridInstance,
+        level: GridLevel,
+        order_id: str,
+        place_sell: bool = False
+    ) -> bool:
+        """
+        撤买单后对账：若存在部分成交，补记持仓。
+        """
+        order = await self._fetch_final_order_snapshot(grid.config.inst_id, order_id)
+        if not order:
+            return False
+
+        filled_price, filled_size = self._extract_fill_info(order, level.price, Decimal("0"))
+        if filled_size <= 0:
+            return False
+
+        await self._on_buy_filled(
+            grid,
+            level,
+            filled_price,
+            filled_size,
+            place_sell=place_sell
+        )
+        return True
+
+    async def _reconcile_sell_order_after_cancel(
+        self,
+        grid: GridInstance,
+        buy_level_id: int,
+        order_id: str,
+        fallback_price: Decimal
+    ) -> bool:
+        """
+        撤卖单后对账：若存在部分成交，补记利润和剩余仓位。
+        """
+        order = await self._fetch_final_order_snapshot(grid.config.inst_id, order_id)
+        if not order:
+            return False
+
+        filled_price, filled_size = self._extract_fill_info(order, fallback_price, Decimal("0"))
+        if filled_size <= 0:
+            return False
+
+        await self._on_sell_filled(grid, buy_level_id, filled_price, filled_size)
+        return True
+
     async def _check_buy_order_filled(self, grid: GridInstance, level: GridLevel) -> bool:
         """检查买单是否成交"""
         if not level.order_id:
@@ -465,8 +566,16 @@ class GridTradeManager:
                     self._mark_order_seen(level.order_id)
                     return False
                 logger.warning(f"买单连续查询失败且非 live，重置订单：{grid.config.inst_id} order_id={level.order_id}")
-                level.status = LevelStatus.PENDING
-                level.order_id = None
+                order_id = level.order_id
+                reconciled = await self._reconcile_buy_order_after_cancel(
+                    grid,
+                    level,
+                    order_id,
+                    place_sell=True
+                )
+                if not reconciled:
+                    level.status = LevelStatus.PENDING
+                    level.order_id = None
                 return True
             return False
 
@@ -495,7 +604,8 @@ class GridTradeManager:
         grid: GridInstance,
         level: GridLevel,
         filled_price: Decimal,
-        filled_size: Decimal
+        filled_size: Decimal,
+        place_sell: bool = True
     ):
         """买单成交后：记录持仓并挂卖单"""
         target_sell_price = self.strategy.get_target_sell_price(grid, level.level_id)
@@ -508,15 +618,18 @@ class GridTradeManager:
         existing = grid.get_position(level.level_id)
         if existing:
             extra_size = filled_size
-            new_size = existing.coin_size + filled_size
-            weighted_price = (
-                existing.buy_price * existing.coin_size + filled_price * filled_size
-            ) / new_size
             if existing.sell_order_id:
-                cancel_ok = await self.cancel_order(grid.config.inst_id, existing.sell_order_id)
+                old_sell_order_id = existing.sell_order_id
+                fallback_price = existing.target_sell_price
+                cancel_ok = await self.cancel_order(grid.config.inst_id, old_sell_order_id)
                 if cancel_ok:
-                    existing.sell_order_id = None
-                elif self.client.is_order_live(grid.config.inst_id, existing.sell_order_id):
+                    await self._reconcile_sell_order_after_cancel(
+                        grid,
+                        level.level_id,
+                        old_sell_order_id,
+                        fallback_price
+                    )
+                elif self.client.is_order_live(grid.config.inst_id, old_sell_order_id):
                     # 无法安全重挂时，先用市价卖出新增仓位，避免未对冲暴露
                     logger.error(
                         f"旧卖单撤销失败且仍 live，执行紧急对冲：{grid.config.inst_id} "
@@ -529,11 +642,34 @@ class GridTradeManager:
                     level.order_type = "buy"
                     return
                 else:
+                    await self._reconcile_sell_order_after_cancel(
+                        grid,
+                        level.level_id,
+                        old_sell_order_id,
+                        fallback_price
+                    )
+
+                existing = grid.get_position(level.level_id)
+                if existing and existing.sell_order_id == old_sell_order_id:
                     existing.sell_order_id = None
 
-            existing.coin_size = new_size
-            existing.buy_price = weighted_price
-            existing.target_sell_price = target_sell_price
+            existing = grid.get_position(level.level_id)
+            if existing:
+                new_size = existing.coin_size + filled_size
+                weighted_price = (
+                    existing.buy_price * existing.coin_size + filled_price * filled_size
+                ) / new_size
+
+                existing.coin_size = new_size
+                existing.buy_price = weighted_price
+                existing.target_sell_price = target_sell_price
+            else:
+                grid.add_position(
+                    level_id=level.level_id,
+                    coin_size=filled_size,
+                    buy_price=filled_price,
+                    target_sell_price=target_sell_price
+                )
         else:
             grid.add_position(
                 level_id=level.level_id,
@@ -552,8 +688,9 @@ class GridTradeManager:
             f"@ {filled_price}, size={filled_size}, 目标卖出={target_sell_price}"
         )
 
-        # 尝试挂卖单；失败不丢状态，后续循环会重试
-        await self._ensure_sell_order_for_position(grid, level.level_id)
+        if place_sell:
+            # 尝试挂卖单；失败不丢状态，后续循环会重试
+            await self._ensure_sell_order_for_position(grid, level.level_id)
 
     async def _ensure_sell_order_for_position(self, grid: GridInstance, buy_level_id: int) -> bool:
         """确保该持仓对应的卖单已挂出"""
@@ -601,7 +738,16 @@ class GridTradeManager:
                 logger.warning(
                     f"卖单连续查询失败且非 live，清理卖单引用：{grid.config.inst_id} order_id={position.sell_order_id}"
                 )
-                position.sell_order_id = None
+                order_id = position.sell_order_id
+                await self._reconcile_sell_order_after_cancel(
+                    grid,
+                    position.level_id,
+                    order_id,
+                    position.target_sell_price
+                )
+                remaining = grid.get_position(position.level_id)
+                if remaining:
+                    remaining.sell_order_id = None
                 return True
             return False
 
