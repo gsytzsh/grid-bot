@@ -197,22 +197,29 @@ class GridTradeManager:
         if not grid:
             return {"success": False, "message": "网格不存在"}
 
+        # 1. 先更新网格状态（确保前端能立即看到）
         self.strategy.stop_grid(grid_id)
-        logger.info(f"停止网格 {grid_id}，开始撤销挂单...")
+        logger.info(f"停止网格 {grid_id}，状态已设置为 STOPPED")
 
-        # 1. 先从 OKX API 获取所有该交易对的挂单并撤销（确保全部清理）
-        await self._cancel_all_orders_for_inst(grid.config.inst_id)
-
-        # 2. 更新本地状态
+        # 2. 更新本地订单状态（立即清除）
         for level in grid.levels:
             if level.order_id:
                 level.status = LevelStatus.CANCELLED
                 level.order_id = None
 
-        # 3. 卖出所有持仓（彻底清仓）
+        # 3. 从 OKX API 获取并撤销所有挂单（异步执行，不影响状态）
+        try:
+            await self._cancel_all_orders_for_inst(grid.config.inst_id)
+        except Exception as e:
+            logger.error(f"撤销挂单异常：{e}")
+
+        # 4. 卖出所有持仓（彻底清仓）
         if grid.positions:
             logger.info(f"网格 {grid_id} 有 {len(grid.positions)} 个持仓，开始平仓")
-            await self._close_all_positions(grid)
+            try:
+                await self._close_all_positions(grid)
+            except Exception as e:
+                logger.error(f"平仓异常：{e}")
 
         logger.info(f"网格已停止：{grid_id}")
         return {"success": True, "message": "网格已停止"}
