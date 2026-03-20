@@ -471,6 +471,9 @@ class GridTradeManager:
                 sell_level.status = LevelStatus.ORDER_PLACED
                 sell_level.order_type = "sell"
                 logger.info(f"挂出卖单：{grid.config.inst_id} @ {target_sell_price}")
+
+            # 持久化网格状态
+            self.strategy.update_grid(grid.grid_id)
         else:
             # 已经是最上面一格，无法挂卖单，重置买单级别
             level.status = LevelStatus.PENDING
@@ -507,6 +510,9 @@ class GridTradeManager:
         buy_level.order_type = "buy"
 
         logger.info(f"卖单成交，准备重新挂买单：{grid.config.inst_id} @ {buy_level.price}")
+
+        # 持久化网格状态
+        self.strategy.update_grid(grid.grid_id)
 
     async def _check_sell_order_filled(self, grid: GridInstance, level: GridLevel, current_price: Decimal):
         """检查卖单是否成交"""

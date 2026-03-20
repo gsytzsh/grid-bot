@@ -11,19 +11,30 @@ pending → order_placed → filled → pending (循环)
         (已挂单)    (已成交)  (重置)
 """
 import logging
+import json
+import os
 from typing import List, Dict, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from decimal import Decimal
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# 持久化文件路径
+DATA_DIR = Path(__file__).parent.parent.parent / 'data'
+GRIDS_FILE = DATA_DIR / 'grids.json'
 
 
 class GridStatus(Enum):
     """网格状态"""
     ACTIVE = "active"
     STOPPED = "stopped"
+
+    @classmethod
+    def from_string(cls, value: str) -> 'GridStatus':
+        return cls(value)
 
 
 class LevelStatus(Enum):
@@ -32,6 +43,24 @@ class LevelStatus(Enum):
     ORDER_PLACED = "order_placed"  # 已挂单，等待成交
     FILLED = "filled"            # 已成交
     CANCELLED = "cancelled"      # 已取消
+
+    @classmethod
+    def from_string(cls, value: str) -> 'LevelStatus':
+        return cls(value)
+
+
+def decimal_to_float(obj):
+    """将 Decimal 转换为 float"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return obj
+
+
+def float_to_decimal(obj):
+    """将 float 转换为 Decimal"""
+    if isinstance(obj, (int, float)):
+        return Decimal(str(obj))
+    return obj
 
 
 @dataclass
@@ -47,6 +76,33 @@ class GridLevel:
     filled_time: Optional[datetime] = None
     profit: Decimal = Decimal('0')  # 该格利润（仅 sell 格）
 
+    def to_dict(self) -> Dict:
+        return {
+            'level_id': self.level_id,
+            'price': decimal_to_float(self.price),
+            'order_type': self.order_type,
+            'size': decimal_to_float(self.size),
+            'status': self.status.value,
+            'order_id': self.order_id,
+            'filled_price': decimal_to_float(self.filled_price) if self.filled_price else None,
+            'filled_time': self.filled_time.isoformat() if self.filled_time else None,
+            'profit': decimal_to_float(self.profit)
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'GridLevel':
+        return cls(
+            level_id=data['level_id'],
+            price=float_to_decimal(data['price']),
+            order_type=data['order_type'],
+            size=float_to_decimal(data['size']),
+            status=LevelStatus.from_string(data['status']),
+            order_id=data.get('order_id'),
+            filled_price=float_to_decimal(data['filled_price']) if data.get('filled_price') else None,
+            filled_time=datetime.fromisoformat(data['filled_time']) if data.get('filled_time') else None,
+            profit=float_to_decimal(data.get('profit', 0))
+        )
+
 
 @dataclass
 class GridConfig:
@@ -59,6 +115,29 @@ class GridConfig:
     stop_loss_price: Optional[Decimal] = None  # 止损价
     take_profit_price: Optional[Decimal] = None  # 止盈价
 
+    def to_dict(self) -> Dict:
+        return {
+            'inst_id': self.inst_id,
+            'lower_price': decimal_to_float(self.lower_price),
+            'upper_price': decimal_to_float(self.upper_price),
+            'grid_num': self.grid_num,
+            'investment_amount': decimal_to_float(self.investment_amount),
+            'stop_loss_price': decimal_to_float(self.stop_loss_price) if self.stop_loss_price else None,
+            'take_profit_price': decimal_to_float(self.take_profit_price) if self.take_profit_price else None
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'GridConfig':
+        return cls(
+            inst_id=data['inst_id'],
+            lower_price=float_to_decimal(data['lower_price']),
+            upper_price=float_to_decimal(data['upper_price']),
+            grid_num=data['grid_num'],
+            investment_amount=float_to_decimal(data['investment_amount']),
+            stop_loss_price=float_to_decimal(data['stop_loss_price']) if data.get('stop_loss_price') else None,
+            take_profit_price=float_to_decimal(data['take_profit_price']) if data.get('take_profit_price') else None
+        )
+
 
 @dataclass
 class Position:
@@ -67,6 +146,23 @@ class Position:
     coin_size: Decimal
     buy_price: Decimal
     target_sell_price: Decimal
+
+    def to_dict(self) -> Dict:
+        return {
+            'level_id': self.level_id,
+            'coin_size': decimal_to_float(self.coin_size),
+            'buy_price': decimal_to_float(self.buy_price),
+            'target_sell_price': decimal_to_float(self.target_sell_price)
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Position':
+        return cls(
+            level_id=data['level_id'],
+            coin_size=float_to_decimal(data['coin_size']),
+            buy_price=float_to_decimal(data['buy_price']),
+            target_sell_price=float_to_decimal(data['target_sell_price'])
+        )
 
 
 @dataclass
@@ -116,6 +212,38 @@ class GridInstance:
         """获取持仓"""
         return self.positions.get(level_id)
 
+    def to_dict(self) -> Dict:
+        """转换为字典（用于持久化）"""
+        return {
+            'grid_id': self.grid_id,
+            'config': self.config.to_dict(),
+            'levels': [level.to_dict() for level in self.levels],
+            'status': self.status.value,
+            'created_time': self.created_time.isoformat(),
+            'total_profit': decimal_to_float(self.total_profit),
+            'total_trades': self.total_trades,
+            'invested_amount': decimal_to_float(self.invested_amount),
+            'current_value': decimal_to_float(self.current_value),
+            'positions': {str(k): v.to_dict() for k, v in self.positions.items()}
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'GridInstance':
+        """从字典加载"""
+        grid = cls(
+            grid_id=data['grid_id'],
+            config=GridConfig.from_dict(data['config']),
+            status=GridStatus.from_string(data['status']),
+            created_time=datetime.fromisoformat(data['created_time']),
+            total_profit=float_to_decimal(data.get('total_profit', 0)),
+            total_trades=data.get('total_trades', 0),
+            invested_amount=float_to_decimal(data.get('invested_amount', 0)),
+            current_value=float_to_decimal(data.get('current_value', 0)),
+            positions={int(k): Position.from_dict(v) for k, v in data.get('positions', {}).items()}
+        )
+        grid.levels = [GridLevel.from_dict(level) for level in data.get('levels', [])]
+        return grid
+
 
 class GridStrategy:
     """网格策略引擎"""
@@ -123,6 +251,52 @@ class GridStrategy:
     def __init__(self):
         self.grids: Dict[str, GridInstance] = {}
         self.grid_counter = 0
+        self._ensure_data_dir()
+        self.load_grids()  # 启动时加载持久化的网格
+
+    def _ensure_data_dir(self):
+        """确保数据目录存在"""
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    def save_grids(self):
+        """保存网格到文件"""
+        try:
+            data = {
+                'grid_counter': self.grid_counter,
+                'grids': [grid.to_dict() for grid in self.grids.values()]
+            }
+            with open(GRIDS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.debug(f"已保存 {len(self.grids)} 个网格到 {GRIDS_FILE}")
+        except Exception as e:
+            logger.error(f"保存网格失败：{e}")
+
+    def load_grids(self):
+        """从文件加载网格"""
+        if not GRIDS_FILE.exists():
+            logger.info("未找到持久化的网格文件")
+            return
+
+        try:
+            with open(GRIDS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            self.grid_counter = data.get('grid_counter', 0)
+            for grid_data in data.get('grids', []):
+                grid = GridInstance.from_dict(grid_data)
+                self.grids[grid.grid_id] = grid
+                # 恢复运行中的网格状态
+                if grid.status == GridStatus.ACTIVE:
+                    # 重置所有订单状态（因为重启后订单 ID 已失效）
+                    for level in grid.levels:
+                        level.order_id = None
+                        if level.status == LevelStatus.ORDER_PLACED:
+                            level.status = LevelStatus.PENDING
+                    logger.info(f"恢复网格：{grid.grid_id} ({grid.config.inst_id})")
+
+            logger.info(f"已加载 {len(self.grids)} 个网格")
+        except Exception as e:
+            logger.error(f"加载网格失败：{e}")
 
     def create_grid(self, config: GridConfig) -> GridInstance:
         """
@@ -176,6 +350,7 @@ class GridStrategy:
         self.grids[grid_id] = grid
         logger.info(f"创建网格：{grid_id}, 交易对={config.inst_id}, "
                    f"区间={config.lower_price}-{config.upper_price}, 格数={config.grid_num}")
+        self.save_grids()  # 持久化
 
         return grid
 
@@ -189,6 +364,7 @@ class GridStrategy:
         if grid:
             grid.status = GridStatus.STOPPED
             logger.info(f"停止网格：{grid_id}")
+            self.save_grids()  # 持久化
             return True
         return False
 
@@ -196,12 +372,18 @@ class GridStrategy:
         """删除网格"""
         if grid_id in self.grids:
             del self.grids[grid_id]
+            self.save_grids()  # 持久化
             return True
         return False
 
     def get_all_grids(self) -> List[GridInstance]:
         """获取所有网格"""
         return list(self.grids.values())
+
+    def update_grid(self, grid_id: str):
+        """更新网格（触发持久化）"""
+        if grid_id in self.grids:
+            self.save_grids()
 
     def calculate_grid_levels(
         self,
