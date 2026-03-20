@@ -385,6 +385,10 @@ class GridTradeManager:
             if level.status == LevelStatus.CANCELLED:
                 continue
 
+            # 【修复】FILLED 状态表示买单已成交，等待卖单成交，不重新挂买单
+            if level.status == LevelStatus.FILLED:
+                continue
+
             # 检查已挂出的订单是否成交
             if level.status == LevelStatus.ORDER_PLACED:
                 if level.order_type == "sell":
@@ -395,13 +399,6 @@ class GridTradeManager:
             # 检查是否需要重新挂单
             elif level.status == LevelStatus.PENDING:
                 await self._check_and_place_order(grid, level, current_price)
-
-            # 已成交但未重置的网格（应该不会出现）
-            elif level.status == LevelStatus.FILLED:
-                # 这种情况不应该出现，如果出现说明逻辑有问题
-                logger.warning(f"网格 {grid.grid_id} 级别 {level.level_id} 状态异常：FILLED")
-                # 尝试重置
-                level.status = LevelStatus.PENDING
 
     async def _check_buy_order_filled(self, grid: GridInstance, level: GridLevel, current_price: Decimal):
         """检查买单是否成交"""
@@ -447,9 +444,11 @@ class GridTradeManager:
 
             logger.info(f"买单成交：{grid.config.inst_id} @ {filled_price}, 目标卖出：{target_sell_price}")
 
-            # 重置买单级别状态（准备下一轮）
-            level.status = LevelStatus.PENDING
+            # 【关键修复】买单成交后，不立即重置状态，标记为 FILLED
+            # 等待卖单成交后，再重置买单状态，防止重复挂买单
+            level.status = LevelStatus.FILLED
             level.order_id = None
+            level.filled_price = filled_price
 
             # 检查目标卖单级别是否已有订单
             if sell_level.status == LevelStatus.ORDER_PLACED:
@@ -503,11 +502,12 @@ class GridTradeManager:
 
         grid.total_trades += 1
 
-        # 重置买单级别状态（之前可能被占用）
+        # 【关键修复】卖单成交后，重置买单级别状态，允许重新挂买单
         buy_level = grid.levels[buy_level_id]
         buy_level.status = LevelStatus.PENDING
         buy_level.order_id = None
         buy_level.order_type = "buy"
+        buy_level.filled_price = None  # 清除成交记录
 
         logger.info(f"卖单成交，准备重新挂买单：{grid.config.inst_id} @ {buy_level.price}")
 

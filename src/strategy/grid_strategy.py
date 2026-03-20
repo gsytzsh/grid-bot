@@ -292,7 +292,9 @@ class GridStrategy:
                         level.order_id = None
                         if level.status == LevelStatus.ORDER_PLACED:
                             level.status = LevelStatus.PENDING
-                    logger.info(f"恢复网格：{grid.grid_id} ({grid.config.inst_id})")
+                        # FILLED 状态保持不变，保留 filled_price 信息
+                        # 重启后会根据 filled_price 和持仓信息重新挂卖单
+                    logger.info(f"恢复网格：{grid.grid_id} ({grid.config.inst_id}), 持仓数={len(grid.positions)}")
 
             logger.info(f"已加载 {len(self.grids)} 个网格")
         except Exception as e:
