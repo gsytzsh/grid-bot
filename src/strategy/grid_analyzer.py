@@ -150,27 +150,18 @@ class GridAnalyzer:
 
     def _calc_volatility(self, klines: List[Dict]) -> Tuple[int, str]:
         """
-        计算波动率（基于收盘涨跌幅）
+        计算波动率（基于 ATR）
 
-        目标范围：4%-18%/周
+        口径：
+        - 先计算 4H 的 ATR(14)%
+        - 再换算为周等效波动（便于沿用原评分区间）
         """
-        if len(klines) < 14:
+        atr_pct_4h = self._calc_atr_percent(klines, period=14)
+        if atr_pct_4h is None:
             return 50, "数据不足"
 
-        price_changes = []
-        for i in range(1, len(klines)):
-            prev_close = float(klines[i - 1]["c"])
-            curr_close = float(klines[i]["c"])
-            if prev_close <= 0:
-                continue
-            change = abs(curr_close - prev_close) / prev_close * 100
-            price_changes.append(change)
-
-        if not price_changes:
-            return 30, "数据异常"
-
-        avg_vol = sum(price_changes) / len(price_changes)
-        weekly_vol = float(avg_vol) * (42 ** 0.5)
+        # 4H -> 周等效（每周约 42 根 4H K）
+        weekly_vol = atr_pct_4h * (42 ** 0.5)
 
         if 4 <= weekly_vol <= 18:
             score = 100
@@ -190,7 +181,46 @@ class GridAnalyzer:
         else:
             desc = f"过高 ({weekly_vol:.1f}%/周)"
 
-        return score, desc
+        return score, f"{desc} | ATR14(4H)={atr_pct_4h:.2f}%"
+
+    @staticmethod
+    def _calc_atr_percent(klines: List[Dict], period: int = 14) -> Optional[float]:
+        """
+        计算 ATR(%)：ATR / 最新收盘价 * 100
+        """
+        if len(klines) < period + 1:
+            return None
+
+        true_ranges: List[float] = []
+        for i in range(1, len(klines)):
+            try:
+                high = float(klines[i]["h"])
+                low = float(klines[i]["l"])
+                prev_close = float(klines[i - 1]["c"])
+            except Exception:
+                continue
+
+            if high <= 0 or low <= 0 or prev_close <= 0:
+                continue
+
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            true_ranges.append(tr)
+
+        if len(true_ranges) < period:
+            return None
+
+        atr = sum(true_ranges[-period:]) / period
+        try:
+            last_close = float(klines[-1]["c"])
+        except Exception:
+            return None
+        if last_close <= 0:
+            return None
+        return atr / last_close * 100
 
     def _calc_trend(self, klines: List[Dict]) -> Tuple[int, str]:
         """
