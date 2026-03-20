@@ -189,13 +189,23 @@ async def preview_grid(req: GridPreviewRequest):
 
 
 @app.get("/api/grids/analyze")
-async def analyze_grid(inst_id: str):
+async def analyze_grid(
+    inst_id: str,
+    lower_price: Optional[float] = None,
+    upper_price: Optional[float] = None,
+    grid_num: Optional[int] = None
+):
     """分析交易对是否适合网格交易"""
     b = get_or_create_bot()
     if not b.analyzer:
         raise HTTPException(status_code=500, detail="Not initialized")
 
-    result = b.analyzer.analyze(inst_id)
+    result = b.analyzer.analyze(
+        inst_id=inst_id,
+        lower_price=Decimal(str(lower_price)) if lower_price is not None else None,
+        upper_price=Decimal(str(upper_price)) if upper_price is not None else None,
+        grid_num=grid_num
+    )
     return {
         "suitable": result.suitable,
         "score": result.score,

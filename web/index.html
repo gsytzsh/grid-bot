@@ -589,13 +589,23 @@
 
         async function analyzeMarket() {
             const instId = document.getElementById('instId').value;
+            const lower = parseFloat(document.getElementById('lowerPrice').value);
+            const upper = parseFloat(document.getElementById('upperPrice').value);
+            const gridNum = parseInt(document.getElementById('gridNum').value);
             const container = document.getElementById('marketAnalysis');
 
             try {
                 container.style.display = 'block';
                 container.innerHTML = '<div style="text-align:center;padding:20px;">分析中...</div>';
 
-                const res = await fetch(`/api/grids/analyze?inst_id=${encodeURIComponent(instId)}`);
+                const params = new URLSearchParams({ inst_id: instId });
+                if (!isNaN(lower) && !isNaN(upper) && !isNaN(gridNum) && lower > 0 && upper > lower && gridNum > 0) {
+                    params.append('lower_price', String(lower));
+                    params.append('upper_price', String(upper));
+                    params.append('grid_num', String(gridNum));
+                }
+
+                const res = await fetch(`/api/grids/analyze?${params.toString()}`);
                 const data = await res.json();
 
                 // 检查是否有错误
@@ -636,6 +646,10 @@
                     <div class="analysis-row">
                         <span class="analysis-label">⚡ 短期波动</span>
                         <span class="analysis-value">${data.signals?.short_volatility || '-'}</span>
+                    </div>
+                    <div class="analysis-row">
+                        <span class="analysis-label">💰 网格经济性</span>
+                        <span class="analysis-value">${data.signals?.grid_economics || '-'}</span>
                     </div>
                     <div class="analysis-suggestion">${data.suggestion}</div>
                     ${data.risk_warning && data.risk_warning !== '无重大风险' ? `
