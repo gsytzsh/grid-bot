@@ -173,7 +173,7 @@ async def get_grids():
     return b.get_grids()
 
 
-@app.get("/api/grids/preview")
+@app.post("/api/grids/preview")
 async def preview_grid(req: GridPreviewRequest):
     """预览网格价格"""
     b = get_or_create_bot()

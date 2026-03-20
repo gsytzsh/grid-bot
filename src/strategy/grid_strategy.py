@@ -12,9 +12,8 @@ pending → order_placed → filled → pending (循环)
 """
 import logging
 import json
-import os
 from typing import List, Dict, Optional
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from decimal import Decimal
 from datetime import datetime
 from enum import Enum
@@ -146,13 +145,15 @@ class Position:
     coin_size: Decimal
     buy_price: Decimal
     target_sell_price: Decimal
+    sell_order_id: Optional[str] = None  # 独立跟踪该持仓的卖单
 
     def to_dict(self) -> Dict:
         return {
             'level_id': self.level_id,
             'coin_size': decimal_to_float(self.coin_size),
             'buy_price': decimal_to_float(self.buy_price),
-            'target_sell_price': decimal_to_float(self.target_sell_price)
+            'target_sell_price': decimal_to_float(self.target_sell_price),
+            'sell_order_id': self.sell_order_id
         }
 
     @classmethod
@@ -161,7 +162,8 @@ class Position:
             level_id=data['level_id'],
             coin_size=float_to_decimal(data['coin_size']),
             buy_price=float_to_decimal(data['buy_price']),
-            target_sell_price=float_to_decimal(data['target_sell_price'])
+            target_sell_price=float_to_decimal(data.get('target_sell_price', 0)),
+            sell_order_id=data.get('sell_order_id')
         )
 
 
@@ -171,7 +173,7 @@ class GridInstance:
     grid_id: str
     config: GridConfig
     levels: List[GridLevel] = field(default_factory=list)
-    status: GridStatus = GridStatus.ACTIVE
+    status: GridStatus = GridStatus.STOPPED
     created_time: datetime = field(default_factory=datetime.now)
     total_profit: Decimal = Decimal('0')
     total_trades: int = 0
@@ -284,21 +286,60 @@ class GridStrategy:
             self.grid_counter = data.get('grid_counter', 0)
             for grid_data in data.get('grids', []):
                 grid = GridInstance.from_dict(grid_data)
+                self._normalize_loaded_grid(grid)
                 self.grids[grid.grid_id] = grid
-                # 恢复运行中的网格状态
                 if grid.status == GridStatus.ACTIVE:
-                    # 重置所有订单状态（因为重启后订单 ID 已失效）
-                    for level in grid.levels:
-                        level.order_id = None
-                        if level.status == LevelStatus.ORDER_PLACED:
-                            level.status = LevelStatus.PENDING
-                        # FILLED 状态保持不变，保留 filled_price 信息
-                        # 重启后会根据 filled_price 和持仓信息重新挂卖单
                     logger.info(f"恢复网格：{grid.grid_id} ({grid.config.inst_id}), 持仓数={len(grid.positions)}")
 
             logger.info(f"已加载 {len(self.grids)} 个网格")
         except Exception as e:
             logger.error(f"加载网格失败：{e}")
+
+    def _normalize_loaded_grid(self, grid: GridInstance):
+        """兼容旧持久化数据格式，统一为当前网格结构"""
+        step = (grid.config.upper_price - grid.config.lower_price) / grid.config.grid_num
+        default_size = (
+            (grid.config.investment_amount / grid.config.lower_price * Decimal('0.9')) / grid.config.grid_num
+        ).quantize(Decimal('0.0001'))
+
+        # 统一只维护 buy 级别（0..grid_num-1）
+        old_levels = {level.level_id: level for level in grid.levels}
+        normalized_levels: List[GridLevel] = []
+        for i in range(grid.config.grid_num):
+            price = (grid.config.lower_price + step * i).quantize(Decimal('0.01'))
+            level = old_levels.get(i)
+            if level:
+                level.price = price
+                level.order_type = "buy"
+                if level.size <= 0:
+                    level.size = default_size
+                # 没有持仓却处于 FILLED，恢复为待挂买单
+                if level.status == LevelStatus.FILLED and i not in grid.positions:
+                    level.status = LevelStatus.PENDING
+                    level.filled_price = None
+                    level.order_id = None
+            else:
+                level = GridLevel(
+                    level_id=i,
+                    price=price,
+                    order_type="buy",
+                    size=default_size,
+                    status=LevelStatus.PENDING
+                )
+            normalized_levels.append(level)
+        grid.levels = normalized_levels
+
+        # 清理越界持仓，并补齐目标卖价
+        for level_id in list(grid.positions.keys()):
+            if level_id < 0 or level_id >= grid.config.grid_num:
+                logger.warning(f"网格 {grid.grid_id} 移除越界持仓 level={level_id}")
+                grid.positions.pop(level_id, None)
+                continue
+            pos = grid.positions[level_id]
+            if pos.target_sell_price <= 0:
+                pos.target_sell_price = (
+                    grid.config.lower_price + step * (level_id + 1)
+                ).quantize(Decimal('0.01'))
 
     def create_grid(self, config: GridConfig) -> GridInstance:
         """
@@ -319,7 +360,6 @@ class GridStrategy:
 
         # 计算每格订单大小
         # 按最低价格计算，确保每格都有足够的资金
-        min_price = config.lower_price
         total_size = config.investment_amount / config.lower_price * Decimal('0.9')  # 留 10% 余量
         size_per_grid = total_size / config.grid_num
 
@@ -346,6 +386,7 @@ class GridStrategy:
             grid_id=grid_id,
             config=config,
             levels=levels,
+            status=GridStatus.STOPPED,
             invested_amount=config.investment_amount
         )
 
@@ -398,25 +439,24 @@ class GridStrategy:
         grid_step = price_range / grid_num
 
         levels = []
-        for i in range(grid_num):
+        for i in range(grid_num + 1):
             price = lower_price + (grid_step * i)
             # 预览时只显示价格，实际买卖类型取决于当前价格
-            # 所有网格初始都是买单，买单成交后在上一格挂卖单
             levels.append({
                 'level': i + 1,
                 'price': float(price.quantize(Decimal('0.01'))),
-                'type': 'buy'  # 初始都是买单
+                'type': 'buy' if i < grid_num else 'sell'
             })
 
         return levels
 
     def get_target_sell_price(self, grid: GridInstance, buy_level_id: int) -> Optional[Decimal]:
         """获取买入单对应的目标卖出价格"""
-        # 上一格就是卖出目标
-        sell_level_id = buy_level_id + 1
-        if sell_level_id < len(grid.levels):
-            return grid.levels[sell_level_id].price
-        return None
+        if buy_level_id < 0 or buy_level_id >= grid.config.grid_num:
+            return None
+        step = (grid.config.upper_price - grid.config.lower_price) / grid.config.grid_num
+        sell_price = grid.config.lower_price + step * (buy_level_id + 1)
+        return sell_price.quantize(Decimal('0.01'))
 
     def check_stop_loss_take_profit(
         self,

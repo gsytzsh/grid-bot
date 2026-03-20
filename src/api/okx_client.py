@@ -65,24 +65,25 @@ class OKXClient:
             flag='0'
         )
 
+    @staticmethod
+    def _extract_data_items(result) -> List[Dict]:
+        """兼容 SDK 返回格式，统一提取 data 列表"""
+        if isinstance(result, dict):
+            data = result.get('data', [])
+            return data if isinstance(data, list) else []
+        if isinstance(result, list):
+            return result
+        return []
+
     def get_ticker(self, inst_id: str) -> Optional[Dict]:
         """获取行情数据"""
         try:
             result = self.market_api.get_ticker(instId=inst_id)
-            logger.info(f"OKX API 原始返回 [{inst_id}]: {result}")
-            # OKX API v5 返回格式：{"code": "0", "data": [...]}
-            if result:
-                if isinstance(result, dict):
-                    if result.get('code') == '0':
-                        data = result.get('data', [])
-                        if data and len(data) > 0:
-                            ticker_data = data[0]
-                            logger.info(f"提取行情数据 [{inst_id}]: last={ticker_data.get('last')}")
-                            return ticker_data
-                elif isinstance(result, list):
-                    if len(result) > 0:
-                        logger.info(f"返回类型为 list [{inst_id}]: {result[0]}")
-                        return result[0]
+            data = self._extract_data_items(result)
+            if data:
+                ticker_data = data[0]
+                logger.info(f"提取行情数据 [{inst_id}]: last={ticker_data.get('last')}")
+                return ticker_data
             logger.warning(f"获取行情返回空值 {inst_id}: {result}")
             return None
         except Exception as e:
@@ -108,11 +109,10 @@ class OKXClient:
         try:
             result = self.account_api.get_account_balance()
             logger.debug(f"余额 API 返回：{result}")
-            # OKX API v5 返回格式：{"code": "0", "data": [{"details": [...]}]}
-            if result and result.get('code') == '0':
-                data = result.get('data', [])
-                if data and len(data) > 0:
-                    return data[0].get('details', [])
+            data = self._extract_data_items(result)
+            if data:
+                details = data[0].get('details', [])
+                return details if isinstance(details, list) else []
             return []
         except Exception as e:
             logger.error(f"获取余额失败：{e}")
@@ -123,15 +123,14 @@ class OKXClient:
         try:
             result = self.account_api.get_positions()
             positions = []
-            if result:
-                for pos in result:
-                    if pos.get('pos') and Decimal(pos.get('pos', '0')) > 0:
-                        positions.append(Position(
-                            inst_id=pos['instId'],
-                            available=Decimal(pos.get('availPos', '0')),
-                            total=Decimal(pos.get('pos', '0')),
-                            avg_price=Decimal(pos.get('avgPx', '0'))
-                        ))
+            for pos in self._extract_data_items(result):
+                if pos.get('pos') and Decimal(pos.get('pos', '0')) > 0:
+                    positions.append(Position(
+                        inst_id=pos['instId'],
+                        available=Decimal(pos.get('availPos', '0')),
+                        total=Decimal(pos.get('pos', '0')),
+                        avg_price=Decimal(pos.get('avgPx', '0'))
+                    ))
             return positions
         except Exception as e:
             logger.error(f"获取持仓失败：{e}")
@@ -159,21 +158,23 @@ class OKXClient:
                 order_args['px'] = price
 
             result = self.trade_api.place_order(**order_args)
-
-            if result and result.get('ordId'):
-                logger.info(f"下单成功：{side} {inst_id} size={size} price={price}")
-                return OrderResult(
-                    success=True,
-                    order_id=result['ordId'],
-                    message="Order placed successfully"
-                )
-            else:
-                error_msg = result.get('msg', 'Unknown error') if result else 'Empty response'
+            data = self._extract_data_items(result)
+            if isinstance(result, dict) and result.get('code') == '0' and data:
+                item = data[0]
+                if item.get('sCode', '0') == '0' and item.get('ordId'):
+                    logger.info(f"下单成功：{side} {inst_id} size={size} price={price}")
+                    return OrderResult(
+                        success=True,
+                        order_id=item['ordId'],
+                        message=item.get('sMsg', 'Order placed successfully')
+                    )
+                error_msg = item.get('sMsg', 'Unknown error')
                 logger.error(f"下单失败：{error_msg}")
-                return OrderResult(
-                    success=False,
-                    message=error_msg
-                )
+                return OrderResult(success=False, message=error_msg)
+
+            error_msg = result.get('msg', 'Unknown error') if isinstance(result, dict) else 'Empty response'
+            logger.error(f"下单失败：{error_msg}")
+            return OrderResult(success=False, message=error_msg)
         except Exception as e:
             logger.error(f"下单异常：{e}")
             return OrderResult(success=False, message=str(e))
@@ -182,7 +183,11 @@ class OKXClient:
         """撤销订单"""
         try:
             result = self.trade_api.cancel_order(instId=inst_id, ordId=order_id)
-            return result and result.get('ordId') == order_id
+            data = self._extract_data_items(result)
+            if isinstance(result, dict) and result.get('code') == '0' and data:
+                item = data[0]
+                return item.get('sCode', '0') == '0' and item.get('ordId') == order_id
+            return False
         except Exception as e:
             logger.error(f"撤单失败：{e}")
             return False
@@ -191,8 +196,9 @@ class OKXClient:
         """获取订单状态"""
         try:
             result = self.trade_api.get_order(instId=inst_id, ordId=order_id)
-            if result and len(result) > 0:
-                return result[0]
+            data = self._extract_data_items(result)
+            if isinstance(result, dict) and result.get('code') == '0' and data:
+                return data[0]
             return None
         except Exception as e:
             logger.error(f"获取订单状态失败：{e}")
@@ -202,7 +208,8 @@ class OKXClient:
         """获取所有交易对"""
         try:
             result = self.public_api.get_instruments(instType='SPOT')
-            if result:
+            data = self._extract_data_items(result)
+            if data:
                 return [
                     {
                         'inst_id': item['instId'],
@@ -211,7 +218,7 @@ class OKXClient:
                         'min_sz': item.get('minSz', '0'),
                         'tick_sz': item.get('tickSz', '0.01'),
                     }
-                    for item in result
+                    for item in data
                 ]
             return []
         except Exception as e:
